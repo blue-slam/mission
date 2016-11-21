@@ -1,0 +1,82 @@
+<launch>
+
+    <arg name="machine"/>
+
+    <!-- Set to your sensor's range -->
+    <arg name="sensor_range" default="3.5"/>
+
+    <node pkg="frontier_exploration" type="explore_server" name="explore_server" machine="$(arg machine)" respawn="true" output="screen" >
+
+        <param name="frequency" type="double" value="1.0"/>
+        <param name="goal_aliasing" type="double" value="$(arg sensor_range)"/>
+
+        #All standard costmap_2d parameters as in move_base, other than BoundedExploreLayer
+        <rosparam ns="explore_costmap" subst_value="true">
+            footprint: [[0.045, 0.090], [0.045, -0.090], [-0.192, -0.090], [-0.192, 0.090]]
+            footprint_padding: 0.05
+
+            transform_tolerance: 0.5
+            update_frequency: 2.0
+            publish_frequency: 2.0
+
+            # must match incoming static map
+            global_frame: odom
+            robot_base_frame: base_link
+            resolution: 0.025
+
+            rolling_window: false
+            track_unknown_space: true
+
+            plugins:
+
+                - {name: static,           type: "costmap_2d::StaticLayer"}
+                - {name: explore_boundary, type: "frontier_exploration::BoundedExploreLayer"}
+                #Can disable sensor layer if gmapping is fast enough to update scans
+                - {name: sensor,           type: "costmap_2d::ObstacleLayer"}
+                - {name: inflation,        type: "costmap_2d::InflationLayer"}
+
+            static:
+                #Can pull data from gmapping, map_server or a non-rolling costmap
+                # map_topic: /rtabmap/proj_map
+                # map_topic: move_base/global_costmap/costmap
+                map_topic: /map
+                subscribe_to_updates: true
+
+            explore_boundary:
+                resize_to_boundary: false
+                frontier_travel_point: centroid
+                #set to false for gmapping, true if re-exploring a known area
+                explore_clear_space: false
+
+            sensor:
+                observation_sources: base_scan
+                base_scan:
+                    topic: camera/scan
+                    data_type: LaserScan
+                    expected_update_rate: 0.5
+                    observation_persistence: 0.0
+                    marking: true
+                    clearing: true
+                    max_obstacle_height: 0.25
+                    min_obstacle_height: 0.0
+                    inf_is_valid: true
+                    obstacle_range: 2.5
+                    raytrace_range: 3.0
+
+                <!--observation_sources: laser-->
+                <!--laser:-->
+                    <!--topic: leddar/scan-->
+                    <!--data_type: LaserScan-->
+                    <!--expected_update_rate: 0.08-->
+                    <!--observation_persistence: 0.0-->
+                    <!--marking: true-->
+                    <!--clearing: true-->
+                    <!--max_obstacle_height: 0.25-->
+                    <!--min_obstacle_height: 0.0-->
+
+            inflation:
+                inflation_radius: 0.15
+      </rosparam>
+    </node>
+
+</launch>
