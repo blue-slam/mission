@@ -16,10 +16,3 @@ if __name__ == '__main__':
 
     rospy.init_node('mission_controller')
 
-    sm = StateMachine(outcomes=['success'])
-    with sm:
-        StateMachine.add('IDLE', Idle(), transitions={'B0': 'GOTOGOAL', 'B1': 'TELEOP', 'B2': 'GOTOHEADING'})
-        StateMachine.add('GOTOGOAL', GotoGoal([3.0, 0.0, 0.0]), transitions={'success': 'IDLE', 'canceled': 'IDLE'})
-        StateMachine.add('TELEOP', Teleop(), transitions={'success':'IDLE'})
-        StateMachine.add('GOTOHEADING', GotoRelativeHeading([-np.pi / 4.0]), transitions={'success': 'IDLE', 'canceled': 'IDLE'})
-    sm.execute()

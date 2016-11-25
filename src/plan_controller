@@ -1,0 +1,145 @@
+#!/usr/bin/env python
+
+import yaml
+
+import rospy
+import actionlib
+import tf
+
+from smach import State, StateMachine
+from smach_ros import SimpleActionState
+from smach_ros import ActionServerWrapper
+from move_base_msgs.msg import MoveBaseGoal, MoveBaseAction
+from mission.msg import PlanResult, PlanFeedback, PlanAction
+
+
+class _BuildPlan(State):
+    def __init__(self, input_keys, output_keys):
+        State.__init__(self,
+                       outcomes=['succeeded', 'aborted', 'preempted'],
+                       input_keys=input_keys,
+                       output_keys=output_keys)
+
+    def execute(self, userdata):
+        try:
+            rospy.loginfo('planning')
+
+            plan_filename = userdata.plan_goal.plan_path
+            rospy.loginfo('loading plan from: {}'.format(plan_filename))
+            with open(plan_filename, 'r') as stream:
+                userdata.plan = yaml.load(stream)
+
+            rospy.loginfo('adding {} waypoints using frame: {}'.format(len(userdata.plan['waypoints']),
+                                                                       userdata.plan['frame']))
+            for i, waypoint in enumerate(userdata.plan['waypoints']):
+                rospy.loginfo('{} - {} at [{}, {}, {}]'.format(i,
+                                                               waypoint[0],
+                                                               waypoint[1],
+                                                               waypoint[2],
+                                                               waypoint[3]))
+            userdata.plan_index = 0
+            userdata.plan_feedback.goal_name = 'built'
+            return 'succeeded'
+
+        except Exception as e:
+            rospy.logerr(e.message)
+            return 'aborted'
+
+
+class _PlanComplete(StateMachine):
+    def __init__(self, input_keys, output_keys):
+        State.__init__(self,
+                       outcomes=['succeeded', 'aborted', 'preempted'],
+                       input_keys=input_keys,
+                       output_keys=output_keys)
+
+    def execute(self, userdata):
+        userdata.plan_feedback.goal_name = 'done'
+        return 'succeeded'
+
+
+def _next_goal(userdata, goal):
+
+    waypoint = userdata.plan['waypoints'][userdata.plan_index]
+
+    rospy.loginfo('{} at [{}, {}, {}]'.format(waypoint[0],
+                                              waypoint[1],
+                                              waypoint[2],
+                                              waypoint[3]))
+
+    waypoint_goal = MoveBaseGoal()
+    waypoint_goal.target_pose.header.frame_id = userdata.plan['frame']
+    waypoint_goal.target_pose.pose.position.x = waypoint[1]
+    waypoint_goal.target_pose.pose.position.y = waypoint[2]
+    waypoint_goal.target_pose.pose.position.z = 0.0
+
+    quaternion = tf.transformations.quaternion_from_euler(0.0, 0.0, waypoint[3])
+    waypoint_goal.target_pose.pose.orientation.x = quaternion[0]
+    waypoint_goal.target_pose.pose.orientation.y = quaternion[1]
+    waypoint_goal.target_pose.pose.orientation.z = quaternion[2]
+    waypoint_goal.target_pose.pose.orientation.w = quaternion[3]
+
+    return waypoint_goal
+
+
+def _goal_complete(userdata, status, result):
+    if status == actionlib.GoalStatus.SUCCEEDED:
+        userdata.plan_feedback.goal_name = userdata.plan['waypoints'][userdata.plan_index][0]
+        userdata.plan_index += 1
+        if userdata.plan_index < len(userdata.plan['waypoints']):
+            return 'next'
+        else:
+            userdata.plan_result = PlanResult()
+            userdata.plan_result.time_elapsed = rospy.Duration()
+            return 'succeeded'
+    elif status == actionlib.GoalStatus.PREEMPTED:
+        return 'preempted'
+    else:
+        return 'aborted'
+
+
+if __name__ == '__main__':
+    try:
+        rospy.init_node('plan_controller')
+
+        pe = StateMachine(['succeeded', 'aborted', 'preempted'],
+                          input_keys=['plan_goal'],
+                          output_keys=['plan_result'])
+        pe.userdata.plan_feedback = PlanFeedback()
+        pe.userdata.plan_index = 0
+        pe.userdata.plan = None
+        keys = ['plan_index', 'plan', 'plan_goal', 'plan_result', 'plan_feedback']
+
+        with pe:
+            StateMachine.add('BUILD_PLAN', _BuildPlan(input_keys=keys, output_keys=keys),
+                             transitions={'succeeded': 'RUN_PLAN', 'aborted': 'aborted', 'preempted': 'preempted'})
+            StateMachine.add('RUN_PLAN',
+                             SimpleActionState('move_base', MoveBaseAction,
+                                                goal_cb=_next_goal,
+                                                result_cb=_goal_complete,
+                                                input_keys=keys,
+                                                output_keys=keys,
+                                                outcomes=['next', 'succeeded', 'aborted', 'preempted']),
+                             transitions={'next': 'RUN_PLAN', 'succeeded': 'PLAN_COMPLETE', 'aborted': 'aborted',
+                                          'preempted': 'preempted'})
+            StateMachine.add('PLAN_COMPLETE', _PlanComplete(input_keys=keys, output_keys=keys),
+                             transitions={'succeeded': 'succeeded', 'aborted': 'aborted', 'preempted': 'preempted'})
+
+        asw = ActionServerWrapper('mission/plan', PlanAction,
+                                  wrapped_container=pe,
+                                  succeeded_outcomes=['succeeded'],
+                                  aborted_outcomes=['aborted'],
+                                  preempted_outcomes=['preempted'],
+                                  goal_key='plan_goal',
+                                  feedback_key='plan_feedback',
+                                  result_key='plan_result')
+        asw.run_server()
+
+        rospy.spin()
+
+    except Exception as e:
+        rospy.logwarn(e.message)
+
+
+
+
